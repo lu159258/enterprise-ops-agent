@@ -1,0 +1,61 @@
+server:
+  port: 8066
+
+
+spring:
+  application:
+    name: enterprise-ops-agent
+  datasource:
+    url: jdbc:postgresql://127.0.0.1:5432/postgres
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+
+app:
+  ai:
+    # LLM_API_KEY 必须通过环境变量注入（或 IDE 运行配置），密钥不入库
+    api-key: ${LLM_API_KEY:}
+    # chat 走 OpenAI 兼容接口：专属实例仅支持 /compatible-mode/v1 路径，DashScope 原生路径(/api/v1)会报 url error
+    base-url: ${LLM_BASE_URL:https://ws-p6g74h8cu8qyv386.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}
+    # embedding 走 DashScope 原生接口：专属实例 /api/v1 原生 embedding 路径可用
+    embedding-base-url: ${LLM_EMBEDDING_BASE_URL:https://ws-p6g74h8cu8qyv386.cn-beijing.maas.aliyuncs.com/api/v1}
+    model-name: ${LLM_MODEL_NAME:qwen3.8-27b}
+    temperature: 0.1
+    timeout-seconds: 60
+  rag:
+    # keyword?????????????????????
+    # vector ??????????????? /v1/embeddings ???
+    mode: vector
+    embedding-model-name: ${LLM_EMBEDDING_MODEL_NAME:qwen3.7-text-embedding-flash}
+    top-k: 5
+    dimension: 1024
+
+    diagnose:
+      max-duration-seconds: 120    # ?????? TIMED_OUT
+      model-retry-max-attempts: 3  # ??????????
+      model-retry-backoff-ms: 1000 # ????????????
+  tools:
+    # ???????????????????????????????????
+    service-whitelist: order-service,user-service,payment-service
+    log-max-rows: 20
+  es:
+    url: https://localhost:9200
+    username: elastic
+    password: UrRUCP34qKwxosTcP3n9
+    index: knowledge-chunks
+    dimension: 1024
+  diagnose:
+    max-duration-seconds: 120
+    model-retry-max-attempts: 3
+    model-retry-backoff-ms: 1000
+  auth:
+    jwt-secret: M3M6SMt2wWukRuAvGpdCrWZKt4Xd8Fa7
+    jwt-expire-minutes: 120
+  actions:
+    mode: webhook
+    webhook-url: https://webhook.uutool.cn/95b108d8-3726-499a-975c-36fc8a058902
+  ops:
+    mode: mock      # mock | es —— 数据源切换：单配置文件里改一个词
+    log-index-pattern: logs-*     # ES 日志索引模式（mode=es 时使用）
+  user:
+    mode: mock  # mock | db —— 用户源切换（db=查 01 篇 RBAC 三表）
