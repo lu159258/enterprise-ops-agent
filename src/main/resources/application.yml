@@ -13,12 +13,9 @@ spring:
 
 app:
   ai:
-    # LLM_API_KEY 必须通过环境变量注入（或 IDE 运行配置），密钥不入库
     api-key: ${LLM_API_KEY:}
-    # chat 走 OpenAI 兼容接口：专属实例仅支持 /compatible-mode/v1 路径，DashScope 原生路径(/api/v1)会报 url error
-    base-url: ${LLM_BASE_URL:https://ws-p6g74h8cu8qyv386.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}
-    # embedding 走 DashScope 原生接口：专属实例 /api/v1 原生 embedding 路径可用
-    embedding-base-url: ${LLM_EMBEDDING_BASE_URL:https://ws-p6g74h8cu8qyv386.cn-beijing.maas.aliyuncs.com/api/v1}
+    base-url: ${LLM_BASE_URL}
+    embedding-base-url: ${LLM_EMBEDDING_BASE_URL}
     model-name: ${LLM_MODEL_NAME:qwen3.8-27b}
     temperature: 0.1
     timeout-seconds: 60
@@ -26,7 +23,7 @@ app:
     # keyword?????????????????????
     # vector ??????????????? /v1/embeddings ???
     mode: vector
-    embedding-model-name: ${LLM_EMBEDDING_MODEL_NAME:qwen3.7-text-embedding-flash}
+    embedding-model-name: ${LLM_EMBEDDING_MODEL_NAME}
     top-k: 5
     dimension: 1024
 
