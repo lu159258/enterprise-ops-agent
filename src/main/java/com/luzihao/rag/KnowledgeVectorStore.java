@@ -51,6 +51,13 @@ public class KnowledgeVectorStore {
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> store;
 
+    @Value("${app.rag.min-score}")
+    private double minScore;
+    @Value("${app.rag.chunk-overlap}")
+    private int chunkOverLap;
+    @Value("${app.rag.chunk-size}")
+    private int chunkSize;
+
 
     public KnowledgeVectorStore(EmbeddingModel embeddingModel,
                                 @Value("${app.es.url}") String url,
@@ -100,22 +107,25 @@ public class KnowledgeVectorStore {
         map.put("tenantId", doc.getTenantId());
         map.put("title", doc.getTitle());
         TextSegment whole = TextSegment.from(doc.getContent(), Metadata.from(map));
-        List<TextSegment> chunks = DocumentSplitters.recursive(400, 40).split(
+        List<TextSegment> chunks = DocumentSplitters.recursive(chunkSize, chunkOverLap).split(
                 Document.document(whole.text(), whole.metadata())
         );
 
-        for (TextSegment chunk : chunks) {
+       /* for (TextSegment chunk : chunks) {
             TextSegment withMeta = TextSegment.from(chunk.text(), whole.metadata());
             Embedding emb = embeddingModel.embed(withMeta.text()).content();
             store.add(emb,withMeta);
-        }
+        }*/
+
+        List<TextSegment> withMeta = chunks.stream().map(c -> TextSegment.from(c.text(), whole.metadata())).toList();
+        List<Embedding> embeddings = embeddingModel.embedAll(withMeta).content();
+        store.addAll(embeddings,withMeta);
 
         log.info("向量入库完成 docId={} chunks={}", doc.getId(), chunks.size());
 
     }
 
     public List<KnowledgeHit> search(String tenantId,String query,int topK){
-        double minScore = 0.5;
         Embedding queryEmbedding = embeddingModel.embed(query).content();
         EmbeddingSearchResult<TextSegment> result = store.search(EmbeddingSearchRequest.builder()
                 .queryEmbedding(queryEmbedding).maxResults(topK)
@@ -133,12 +143,16 @@ public class KnowledgeVectorStore {
         String docId = embedded.metadata().getString("documentId");
         String text = embedded.text();
         return new KnowledgeHit("doc-" + docId,docId,embedded.metadata().getString("title"),
-                text.length() > 300 ? text.substring(0, 300) + "..." : text,
+                text,
                 null,
                 "PUBLIC",
                 match.score()
 
                 );
+    }
+    /** 按 docId 清理 ES 向量 */
+    public void removeByDocId(String docId){
+        store.removeAll(metadataKey("documentId").isEqualTo(docId));
     }
 
 }

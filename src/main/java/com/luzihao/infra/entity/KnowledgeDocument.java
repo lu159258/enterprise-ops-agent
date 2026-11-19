@@ -35,7 +35,7 @@ public class KnowledgeDocument {
     private String checksum;
 
     /** 文档版本号，默认 1 */
-    private Integer version;
+    private Integer version = 1;
 
     /** 权限标签，默认 PUBLIC */
     private String permissionTag;

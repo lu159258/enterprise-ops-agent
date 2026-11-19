@@ -10,6 +10,10 @@ spring:
     username: postgres
     password: postgres
     driver-class-name: org.postgresql.Driver
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
 
 app:
   ai:
@@ -26,6 +30,10 @@ app:
     embedding-model-name: ${LLM_EMBEDDING_MODEL_NAME}
     top-k: 5
     dimension: 1024
+    rrf-k: 60
+    min-score: 0.35 # 向量相似度阈值(中文问句与文档片段的 cosine 相似度普遍在 0.3~0.6,0.5 会过滤掉大量有效命中)
+    chunk-size: 1000                    # 分块大小
+    chunk-overlap: 150                  # 分块重叠
 
     diagnose:
       max-duration-seconds: 120    # ?????? TIMED_OUT

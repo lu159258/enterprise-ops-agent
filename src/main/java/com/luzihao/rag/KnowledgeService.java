@@ -1,36 +1,44 @@
 package com.luzihao.rag;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.luzihao.api.result.StatusUpdateResult;
+import com.luzihao.core.user.UserContext;
+import com.luzihao.core.user.UserInfo;
 import com.luzihao.infra.entity.KnowledgeDocument;
 import com.luzihao.infra.service.KnowledgeDocumentService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.security.MessageDigest;
-import java.util.Date;
-import java.util.HexFormat;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
 
 @Service
 @Slf4j
 public class KnowledgeService {
 
-    private final KnowledgeDocumentService documentService;
-    private final Optional<KnowledgeVectorStore> vectorStore;
-    private final String mode;
-    private final int topK;
-    private final int maxContentLength = 50_000;
+    @Autowired
+    private KnowledgeDocumentService documentService;
+    @Autowired
+    private  Optional<KnowledgeVectorStore> vectorStore;
+    @Value("${app.rag.mode}")
+    private  String mode;
 
+    @Value("${app.rag.top-k}")
+    int topK;
+
+    @Value("${app.rag.rrf-k}")
+    int rrfK;
+/*
     public KnowledgeService(KnowledgeDocumentService documentService, Optional<KnowledgeVectorStore> vectorStore,
                             @Value("${app.rag.mode:keyword}") String mode, @Value("${app.rag.top-k:5}") int topK) {
         this.documentService = documentService;
         this.vectorStore = vectorStore;
         this.mode = mode;
         this.topK = topK;
-    }
+    }*/
 
     /**
      * 入库：校验 → checksum 查重 → 存表 → （向量模式）分块入向量库
@@ -41,8 +49,7 @@ public class KnowledgeService {
             throw new IllegalArgumentException("title 必填且不超过 255 字符");
         if (!StringUtils.hasText(content))
             throw new IllegalArgumentException("content 不能为空");
-        if (content.length() > maxContentLength)
-            throw new IllegalArgumentException("content 超过 " + maxContentLength + " 字符上限");
+
         String tag = StringUtils.hasText(permissionTag) ? permissionTag : "PUBLIC";
 
         String checkSum = sha256(content);
@@ -92,7 +99,30 @@ public class KnowledgeService {
             throw new IllegalArgumentException("query 不能为空");
         }
 
-        return "vector".equals(mode) && vectorStore.isPresent() ? searchWithFallback(tenantId,query) : keywordSearch(tenantId,query);
+        List<KnowledgeHit> byVector = tryVectorSearch(tenantId, query, topK);
+        List<KnowledgeHit> byKetWord = keywordSearch(tenantId, query);
+
+
+        //RRF融合
+        Map<String,Double> scores = new HashMap<>(); // key = hit 的 documentId
+        Map<String,List<KnowledgeHit>> byId = new HashMap<>();
+        rank(byVector,scores,byId,rrfK);
+        rank(byKetWord,scores,byId,rrfK);
+        return  scores.entrySet().stream().sorted(Map.Entry.<String,Double>comparingByValue().reversed())
+                .limit(topK).map(e -> byId.get(e.getKey()).getFirst())
+                .toList();
+
+    }
+
+
+
+    /** RRF 核心：一路结果的每个文档按名次累加 1/(k+rank) */
+    private void rank(List<KnowledgeHit> ranked,Map<String,Double> scores,Map<String,List<KnowledgeHit>> byId,int k){
+        for (int i = 0; i < ranked.size(); i++) {
+            String docId = ranked.get(i).documentId();
+            scores.merge(docId,1.0/(k+i+1),Double::sum);
+            byId.computeIfAbsent(docId, x ->new ArrayList<>()).add(ranked.get(i));
+        }
     }
 
     /**
@@ -131,16 +161,87 @@ public class KnowledgeService {
     }
 
     /**
-     * 找到第一个包含关键词的段落，截 300 字符作为片段
+     * 找到第一个包含关键词的段落，截 800 字符作为片段（片段过短会导致模型拿不到回答所需的完整上下文）
      */
     private String locateSnippet(String content, String keyword) {
         for (String para : content.split("\n\n")) {
             if (para.toLowerCase().contains(keyword)) {
-                return para.length() > 300 ? para.substring(0, 300) + "..." : para;
+                return para.length() > 800 ? para.substring(0, 800) + "..." : para;
             }
         }
-        return content.length() > 300 ? content.substring(0, 300) + "..." : content;
+        return content.length() > 800 ? content.substring(0, 800) + "..." : content;
 
 
+    }
+
+    /** 混合模式的向量路——失败/不可用一律返回空集，由 RRF 融合层兜底。
+     *  注意这里不降级 keywordSearch：关键词已是独立另一路在跑，
+     *  再降级会产生双份关键词结果污染排序（两路命中同一文档分数虚高） */
+    private List<KnowledgeHit> tryVectorSearch(String tenantId,String query,int topK){
+        if (vectorStore.isEmpty()){
+            return List.of();
+        }
+
+        try {
+           return vectorStore.get().search(tenantId,query,topK);
+        }catch (Exception e){
+            log.warn("混合模式向量路失败，本轮由关键词路独扛: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    public StatusUpdateResult updateStatus(String id,String status){
+        UserInfo userInfo = UserContext.require();
+        KnowledgeDocument doc = documentService.getById(id);
+        if (null == doc || !doc.getTenantId().equals(userInfo.getTenantId())){
+            throw new IllegalArgumentException("文档不存在或无权操作: " + id);
+
+        }
+
+        doc.setStatus(status);
+        documentService.updateById(doc);
+        // 停用 → 删向量  恢复 ACTIVE → 先清后写回
+        boolean esSynced = "INACTIVE".equals(status) ? deleteVectorsFromEs(doc.getId()) : reingestVectors(doc);
+        return new StatusUpdateResult(doc.getId(),doc.getStatus(),esSynced);
+
+    }
+    /** 恢复 ACTIVE 时向量写回：先清旧向量再重灌，避免 ES 残留重复 chunk */
+
+    private boolean reingestVectors(KnowledgeDocument doc){
+        if (vectorStore.isEmpty()){
+            return true;
+        }
+
+        try {
+            vectorStore.get().removeByDocId(doc.getId());
+            vectorStore.get().ingest(doc);
+            return true;
+        }catch (Exception e){
+            log.error("ES 向量写回失败 docId={}，待对账补偿", doc.getId(), e);
+            return false;
+        }
+    }
+
+    private boolean deleteVectorsFromEs(String docId) {
+        if (vectorStore.isEmpty()) return true;
+        try {
+            vectorStore.get().removeByDocId(docId);
+            return true;
+        } catch (Exception e) {
+            log.error("ES 向量删除失败 docId={}，待对账补偿", docId, e);
+            return false;
+            // 不回滚 PG：状态已变更是事实；残留向量由对账 Runner 收拾
+        }
+    }
+
+    /** 删除：PG 删行 + ES 尽力删，全程幂等 */
+    public void delete(String id) {
+        String tenantId = UserContext.require().getTenantId();
+        KnowledgeDocument doc = documentService.getById(id);
+        if (doc == null || !tenantId.equals(doc.getTenantId())) {
+            return;                                         // 不存在/无权 → 幂等返回（重复删 204）
+        }
+        documentService.removeById(id);
+        deleteVectorsFromEs(doc.getId());                   // 失败留给对账 Runner，不回滚 PG
     }
 }
