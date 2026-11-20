@@ -121,4 +121,13 @@ public class AiConfig {
     public DiagnoseAssistant diagnoseAssistant(ChatModel chatModel){
         return AiServices.builder(DiagnoseAssistant.class).chatModel(chatModel).build();
     }
+
+    @Bean
+    public PlannerAssistant plannerAssistant(ChatModel chatModel){
+        return AiServices.builder(PlannerAssistant.class).chatModel(chatModel).build();
+    }
+    @Bean
+    public SummaryAssistant summaryAssistant(ChatModel chatModel){
+        return AiServices.builder(SummaryAssistant.class).chatModel(chatModel).build();
+    }
 }

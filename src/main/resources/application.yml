@@ -64,3 +64,8 @@ app:
     log-index-pattern: logs-*     # ES 日志索引模式（mode=es 时使用）
   user:
     mode: mock  # mock | db —— 用户源切换（db=查 01 篇 RBAC 三表）
+  planner:
+    enabled: true
+  patrol:
+    enabled: true
+    cron: "0 */5 * * * *"
